@@ -6,7 +6,8 @@
 #include <stdlib.h>
 
 static void get_section_name(bfd *abfd, asection *section, void *data) {
-  printf("section: %s\n", section->name);
+  bfd_vma vma = bfd_get_section_vma(abfd, section);
+  printf("section %p: %s\n", (void*) vma, section->name);
 }
 
 int main(int argc, char** argv) {
@@ -21,7 +22,6 @@ int main(int argc, char** argv) {
     printf("null file\n");
     exit(1);
   }
-
   // Decompress sections?
   abfd->flags |= BFD_DECOMPRESS;
 
@@ -34,6 +34,23 @@ int main(int argc, char** argv) {
   if (!bfd_check_format_matches(abfd, bfd_object, &matching)) {
     printf("Format mismatch?\n");
     exit(1);
+  }
+
+  bfd_mach_o_data_struct *mdata = bfd_mach_o_get_data(abfd);
+  if (mdata == NULL) {
+    printf("Couldn't find mach-o data\n");
+    exit(1);
+  } else {
+    switch (mdata->header.filetype) {
+    case BFD_MACH_O_MH_EXECUTE:
+    case BFD_MACH_O_MH_DYLIB:
+    case BFD_MACH_O_MH_BUNDLE:
+    case BFD_MACH_O_MH_KEXT_BUNDLE:
+      break;
+    default:
+      printf("Bad header filetype\n");
+      exit(1);
+    }
   }
 
   char* section_name = argv[2];
@@ -67,6 +84,21 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
+  if (argc < 4) {
+      printf("symbol count: %ld\n", symcount);
+      asymbol **syms2 = syms;
+      int j = 0;
+      while (syms2[j] != NULL) {
+        asymbol* sym = syms2[j];
+        if (sym->flags & (BSF_LOCAL | BSF_GLOBAL)) {
+          printf("symbol %s\n", sym->name);
+          printf("  addr: %p\n", (void*) sym->value);
+          printf("  sect: %s\n", sym->section->name);
+        }
+        j++;
+      }
+  }
+
   for (int i = 3; i < argc; i++) {
     char* addr_hex = argv[i];
     bfd_vma pc = bfd_scan_vma(addr_hex, NULL, 16);
@@ -80,12 +112,27 @@ int main(int argc, char** argv) {
     unsigned int line = 0;
     unsigned int discriminator = 0;
 
-    int found = bfd_mach_o_find_nearest_line(abfd, syms, section, pc,
-                                             &filename, &functionname,
-                                             &line, &discriminator);
-    /* int found = bfd_find_nearest_line_discriminator(abfd, section, syms, pc, */
-    /*                                                 &filename, &functionname, */
-    /*                                                 &line, &discriminator); */
+    /* int found = bfd_mach_o_find_nearest_line(abfd, syms, section, pc, */
+    /*                                          &filename, &functionname, */
+    /*                                          &line, &discriminator); */
+    int found = bfd_find_nearest_line_discriminator(abfd, section, syms, pc,
+                                                    &filename, &functionname,
+                                                    &line, &discriminator);
+    if (mdata->dwarf2_find_line_info == NULL) {
+      printf("Couldn't slurp debug info?\n");
+      exit(1);
+    }
+    if (mdata->dsym_bfd == NULL) {
+      printf("Couldn't find dsym?\n");
+      exit(1);
+    }
+    // GIVING UP FOR NOW:
+    // `_bfd_dwarf2_find_nearest_line` is failing to find the symbol :-(
+    // also try dwarfdump?
+    // Oh wait, it works, but not for bullshit in the main function??
+    struct dwarf2_debug *stash = (struct dwarf2_debug*) &mdata->dwarf2_find_line_info;
+
+
     if (!found) {
       printf("not found\n");
       exit(1);

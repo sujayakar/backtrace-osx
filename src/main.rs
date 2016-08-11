@@ -1,9 +1,10 @@
 extern crate backtrace;
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::process::Command;
 use std::str::FromStr;
+use std::ptr;
 
 #[derive(PartialEq, Debug)]
 pub struct StackFrame {
@@ -63,11 +64,37 @@ fn stoa_resolve(ptr: *const c_void) -> Option<(String, u32)> {
     }
 }
 
+fn resolve2(ptr: *const c_void) -> Option<(String, u32)> {
+    unsafe {
+        let loadaddr = load_address();
+        let hex_reladdr = CString::new(format!("{:#X}", (ptr as u64) - loadaddr)).unwrap();
 
-pub fn get() -> Traceback {
+        let mut buf = vec![0u8; 1024];
+        let code = get_executable_path((&mut buf).as_mut_ptr(), buf.len());
+        if code != 0 {
+            panic!("_NSGetExecutablePath failed");
+        }
+        let binary_path = CStr::from_ptr(buf.as_ptr() as *const c_char);
+
+        let mut filename: *mut c_char = ptr::null_mut();
+        let mut functionname: *mut c_char = ptr::null_mut();
+        let mut lineno: usize = 0;
+        let found = stoa2_resolve(binary_path.as_ptr(), hex_reladdr.as_ptr(),
+                                  &mut filename, &mut functionname, &mut lineno);
+        if found == 0 {
+            return None;
+        }
+        let filename_s = CStr::from_ptr(filename).to_string_lossy().into_owned();
+        return Some((filename_s, lineno as u32));
+    }
+}
+
+
+pub fn get_da_traceback() -> Traceback {
     let mut frames = Vec::new();
     backtrace::trace(|frame: &backtrace::Frame| {
-        println!("stoa: {:?}\n", stoa_resolve(frame.ip()));
+        println!("stoa:  {:?}", stoa_resolve(frame.ip()));
+        println!("stoa2: {:?}\n", resolve2(frame.ip()));
         return true;
         backtrace::resolve(frame.ip(), |symbol: &backtrace::Symbol| {
             // println!("name: {:?}", symbol.name());
@@ -105,31 +132,52 @@ extern "C" {
     fn get_executable_path(buf: *mut u8, buflen: usize) -> c_int;
 }
 
-#[repr(C)]
-struct bfd;
+#[link(name="stoa2")]
+extern "C" {
+    fn stoa2_resolve(binary_path: *const c_char, addr_hex: *const c_char, filename: *mut *mut c_char, functionname: *mut *mut c_char, lineno: *mut usize) -> c_int;
+}
 
-#[repr(C)]
-struct asection;
+// #[repr(C)]
+// struct bfd;
 
-#[repr(C)]
-struct asymbol;
+// #[repr(C)]
+// struct asection;
+
+// #[repr(C)]
+// struct asymbol;
 
 #[link(name="bfd")]
 extern "C" {
     fn bfd_init();
-    fn bfd_openr(filename: *const c_char, taret: *const c_char) -> *mut bfd;
-    fn bfd_mach_o_find_nearest_line(
-        bfd: *mut bfd,
-        symbols: *mut *mut asymbol,
-        section: *mut asection,
-        filename: *const *mut c_char,
-        functionname: *const *mut c_char,
-        line: *mut c_uint,
-        discriminator: *mut c_uint) -> c_int;
 }
+//     fn bfd_openr(filename: *const c_char, target: *const c_char) -> *mut bfd;
+//     fn bfd_get_section_by_name(bfd: *mut bfd, name: *const c_char) -> *mut asection;
+//     fn bfd_close(bfd: *mut bfd);
+
+//     // macros
+//     // bfd_get_file_flags
+
+
+
+//     fn bfd_mach_o_find_nearest_line(
+//         bfd: *mut bfd,
+//         symbols: *mut *mut asymbol,
+//         section: *mut asection,
+//         filename: *const *mut c_char,
+//         functionname: *const *mut c_char,
+//         line: *mut c_uint,
+//         discriminator: *mut c_uint) -> c_int;
+// }
 
 fn main() {
-    get();
+    unsafe {
+        bfd_init();
+        // let binpath = CString::new("target/debug/rust_test").unwrap();
+        // let target = CString::new("mach-o-x86-64").unwrap();
+        // let bfd_s = bfd_openr(binpath.as_ptr(), target.as_ptr());
+        // assert!(!bfd_s.is_null());
+    }
+    get_da_traceback();
     // bfd_init()
     // bfd_openr() -> *bfd;
     // bfd_get_section_by_name() -> *asection;
