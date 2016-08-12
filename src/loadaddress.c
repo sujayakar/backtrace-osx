@@ -6,9 +6,10 @@
 uint64_t load_address() {
     const struct segment_command_64* cmd = getsegbyname("__TEXT");
     if (cmd == NULL) {
-        return 0;      
+        return 0;
     }
     uint64_t base_address = cmd->vmaddr;
+    printf("cmd->vmaddr: %p\n", (void*) base_address);
 
     char executable_path[1024];
     uint32_t size = sizeof(executable_path);
@@ -30,7 +31,6 @@ uint64_t load_address() {
     if (vmaddr_slide == 0) {
       return 0;
     }
-
     return base_address + vmaddr_slide;
 }
 

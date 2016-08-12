@@ -13,10 +13,10 @@ typedef struct resolution_ctx {
   bfd *abfd;
   asymbol **symtab;
   asection *section;
+  uint64_t loadaddr;
 } resolution_ctx;
 
-
-int stoa2_initialize(char* binary_path, char* section_name, resolution_ctx *out) {
+int stoa2_initialize(char* binary_path, char* section_name, uint64_t loadaddr, resolution_ctx *out) {
   bfd* abfd;
   asymbol **syms;
   int result = -1;
@@ -54,9 +54,12 @@ int stoa2_initialize(char* binary_path, char* section_name, resolution_ctx *out)
   if (symcount < 0)
     goto CLEANUP;
 
+  printf("Expected: %p\n", section->vma);
+
   out->abfd = abfd;
   out->symtab = syms;
   out->section = section;
+  out->loadaddr = loadaddr;
 
   return 0;
 
@@ -68,12 +71,30 @@ int stoa2_initialize(char* binary_path, char* section_name, resolution_ctx *out)
   return -1;
 }
 
-void destroy_bfd(resolution_ctx *ctx) {
-  bfd_close(ctx->abfd);
-  free(ctx->symtab);
+void stoa2_destroy(resolution_ctx *ctx) {
+  if (ctx->abfd != NULL)
+    bfd_close(ctx->abfd);
+  if (ctx->symtab != NULL)
+    free(ctx->symtab);;
 }
 
-int stoa2_resolve(char* binary_path, char* addr_hex, char** filename, char** functionname, unsigned int* lineno) {
+int stoa2_resolve(resolution_ctx *ctx, uint64_t addr, char** filename, char** functionname, unsigned int* lineno) {
+  bfd_vma pc = (bfd_vma) (addr - ctx->loadaddr);
+  if (pc >= bfd_get_section_size(ctx->section)) {
+    return -1;
+  }
+  // wtf is this?
+  unsigned int discriminator;
+  int found =  bfd_find_nearest_line_discriminator(ctx->abfd, ctx->section, ctx->symtab, pc,
+                                                   filename, functionname,
+                                                   lineno, &discriminator);
+  if (!found) {
+    return -1;
+  }
+  return 0;
+}
+
+int stoa2_resolve2(char* binary_path, uint64_t addr, uint64_t loadaddr, char** filename, char** functionname, unsigned int* lineno) {
   bfd* abfd;
   asection* section;
   asymbol **syms;
@@ -100,9 +121,6 @@ int stoa2_resolve(char* binary_path, char* addr_hex, char** filename, char** fun
   if (section == NULL) {
     goto CLEANUP;
   }
-  printf(".text vma: %p\n", (void*) section->vma);
-  printf(".text lma: %p\n", (void*) section->lma);
-
   if ((bfd_get_section_flags(abfd, section) & SEC_ALLOC) == 0) {
     goto CLEANUP;
   }
@@ -125,9 +143,9 @@ int stoa2_resolve(char* binary_path, char* addr_hex, char** filename, char** fun
   }
 
   // Try to resolve the symbol
-  bfd_size_type size = bfd_get_section_size(section);
-  bfd_vma pc = bfd_scan_vma(addr_hex, NULL, 16);
-  if (pc >= size) {
+  bfd_vma pc = (bfd_vma) (addr - loadaddr);
+
+  if (pc >= bfd_get_section_size(section)) {
     goto CLEANUP;
   }
 
