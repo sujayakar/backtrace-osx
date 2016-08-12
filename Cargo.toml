@@ -9,3 +9,4 @@ gcc = "0.3.17"
 
 [dependencies]
 backtrace = "0.2.3"
+lazy_static = "0.1.*"

@@ -1,10 +1,52 @@
 extern crate backtrace;
+#[macro_use]
+extern crate lazy_static;
 
 use std::ffi::{CStr, CString};
+use std::mem;
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::{Once, ONCE_INIT};
 use std::ptr;
+
+static BFD_INITIALIZED: Once = ONCE_INIT;
+
+#[repr(C)]
+struct ResolutionCtx {
+    abfd: *mut c_void,
+    symtab: *mut c_void,
+    section: *mut c_void,
+}
+unsafe impl Sync for ResolutionCtx {}
+
+impl ResolutionCtx {
+    pub fn new() -> Option<Self> {
+        BFD_INITIALIZED.call_once(|| unsafe {bfd_init()});
+        let binary_path = unsafe {
+            let mut buf = vec![0u8; 1024];
+            if get_executable_path((&mut buf).as_mut_ptr(), buf.len()) != 0 {
+                return None;
+            }
+            CString::new(buf).unwrap()
+        };
+        let section_name = CString::new(".text").unwrap();
+        unsafe {
+            let loadaddr = load_address();
+            // If we fail below, the destructor will run on zero'd memory, but that should be fine
+            let mut me: Self = mem::zeroed();
+            if stoa2_initialize(binary_path.as_ptr(), section_name.as_ptr(), &mut me) != 0 {
+                return None;
+            }
+            Some(me)
+        }
+    }
+}
+
+lazy_static! {
+    static ref RESOLUTION_CTX: ResolutionCtx = ResolutionCtx::new().unwrap();
+}
+
 
 #[derive(PartialEq, Debug)]
 pub struct StackFrame {
@@ -135,6 +177,7 @@ extern "C" {
 #[link(name="stoa2")]
 extern "C" {
     fn stoa2_resolve(binary_path: *const c_char, addr_hex: *const c_char, filename: *mut *mut c_char, functionname: *mut *mut c_char, lineno: *mut usize) -> c_int;
+    fn stoa2_initialize(binary_path: *const c_char, section_name: *const c_char, out: *mut ResolutionCtx) -> c_int;
 }
 
 // #[repr(C)]
