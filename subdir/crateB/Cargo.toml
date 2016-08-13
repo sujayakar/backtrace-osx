@@ -1,0 +1,6 @@
+[package]
+name = "crateB"
+version = "0.1.0"
+authors = ["Sujay Jayakar <sujayakar@dropbox.com>"]
+
+[dependencies]
